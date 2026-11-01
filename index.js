@@ -42,6 +42,8 @@ await borrowedCollection.createIndex(
 app.post('/add-book', async(req, res) => {
     const data = {
     ...req.body,
+    // addedByName: req.body.addedByName,
+    // addedByEmail: req.body.addedByEmail,
     createdAt: new Date()
     }
     const result = await booksCollection.insertOne(data)
@@ -64,6 +66,12 @@ app.get("/books", async (req, res) => {
 //http://localhost:8000/books/:id
 app.get("/books/:id", async (req, res) => {
     const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            message: "Invalid book ID."
+    });
+}
     try {
         const result = await booksCollection.findOne({ _id: new ObjectId(id) });
         if (!result) {
@@ -71,12 +79,89 @@ app.get("/books/:id", async (req, res) => {
         }
         res.send(result);
     } catch (err) {
-        console.error("Error fetching book:", err);
+        console.error("Error fetching details endpoint:", err);
         res.status(500).json({
             message: "Failed to fetch book."
         });
     }
 });
+
+app.get("/my-books", async (req, res) => {
+    const { email } = req.query;
+
+    if (!email) {
+        return res.status(400).json({
+            message: "User email is required.",
+        });
+    }
+
+    try {
+        const result = await booksCollection
+            .find({ addedByEmail: email })
+            .sort({ createdAt: -1 })
+            .toArray();
+
+        res.send(result);
+    } catch (err) {
+        console.error("Error fetching user's books:", err);
+
+        res.status(500).json({
+            message: "Failed to fetch your books.",
+        });
+    }
+});
+
+app.patch('/books/:id', async (req, res) => {
+    const { id } = req.params;
+    const updateData = req.body;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            message: "Invalid book ID."
+        });
+    }
+
+    try {
+        const result = await booksCollection.updateOne(
+            { _id: new ObjectId(id) },
+            { $set: updateData }
+        );
+        if (result.matchedCount === 0) {
+            return res.status(404).json({ message: "Book not found." });
+        }
+        res.send({ message: "Book updated successfully." });
+    } catch (err) {
+        console.error("Error updating book", err);
+        res.status(500).json({
+            message: "Failed to update book."
+        });
+    }
+});
+
+app.delete('/books/:id', async (req, res) => {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).json({
+            message: "Invalid book ID."
+        });
+    }
+
+    try {
+        const result = await booksCollection.deleteOne({ _id: new ObjectId(id) });
+        if (result.deletedCount === 0) {
+            return res.status(404).json({ message: "Book not found." });
+        }
+        res.send({ message: "Book deleted successfully." });
+    } catch (err) {
+        console.error("Error deleting book", err);
+        res.status(500).json({
+            message: "Failed to delete book."
+        });
+    }
+});
+
+
 
 //http://localhost:8000/books/most-read
 app.get("/books/most-read", async (req, res) => {
@@ -127,172 +212,7 @@ app.get("/books/most-read", async (req, res) => {
     }
 });
 
-// //http://localhost:8000/my-borrows
-// app.post("/my-borrows", async (req, res) => {
-//     const { bookId, userId } = req.body;
 
-//     if (!ObjectId.isValid(bookId) || !userId) {
-//         return res.status(400).send({
-//             message: "Invalid book or user information."
-//         });
-//     }
-
-//     const session = mongoClient.startSession();
-
-//     let response;
-
-//     try {
-//         await session.withTransaction(async () => {
-//             const bookObjectId = new ObjectId(bookId);
-
-//             const book = await booksCollection.findOne(
-//                 { _id: bookObjectId },
-//                 { session }
-//             );
-
-//             if (!book) {
-//                 response = {
-//                     status: 404,
-//                     message: "Book not found."
-//                 };
-//                 return;
-//             }
-
-//             const alreadyBorrowed = await borrowedCollection.findOne(
-//                 {
-//                     bookId: bookObjectId,
-//                     userId,
-//                     status: "borrowed"
-//                 },
-//                 { session }
-//             );
-
-//             if (alreadyBorrowed) {
-//                 response = {
-//                     status: 409,
-//                     message: "You have already borrowed this book."
-//                 };
-//                 return;
-//             }
-
-//             if (book.copies <= 0) {
-//                 response = {
-//                     status: 400,
-//                     message: "This book is currently unavailable."
-//                 };
-//                 return;
-//             }
-
-//             const updateCopies = await booksCollection.updateOne(
-//                 {
-//                     _id: bookObjectId,
-//                     copies: { $gt: 0 }
-//                 },
-//                 {
-//                     $inc: { copies: -1 }
-//                 },
-//                 { session }
-//             );
-
-//             if (updateCopies.modifiedCount === 0) {
-//                 response = {
-//                     status: 400,
-//                     message: "This book is currently unavailable."
-//                 };
-//                 return;
-//             }
-
-//             const borrowing = {
-//                 bookId: bookObjectId,
-//                 userId,
-//                 borrowedAt: new Date(),
-//                 returnedAt: null,
-//                 status: "borrowed"
-//             };
-
-//             await borrowedCollection.insertOne(borrowing, { session });
-
-//             response = {
-//                 status: 201,
-//                 message: "Book borrowed successfully."
-//             };
-//         });
-//     } finally {
-//         await session.endSession();
-//     }
-
-//     res.status(response.status).send({
-//         message: response.message
-//     });
-// });
-
-// //http://localhost:8000/my-borrows/:borrowingId/return
-// app.patch("/my-borrows/:borrowingId/return", async (req, res) => {
-//     const { borrowingId } = req.params;
-//     const { userId } = req.body;
-
-//     if (!ObjectId.isValid(borrowingId) || !userId) {
-//         return res.status(400).send({
-//             message: "Invalid borrowing or user information."
-//         });
-//     }
-
-//     const session = mongoClient.startSession();
-
-//     let response;
-
-//     try {
-//         await session.withTransaction(async () => {
-//             const borrowing = await borrowedCollection.findOne(
-//                 {
-//                     _id: new ObjectId(borrowingId),
-//                     userId,
-//                     status: "borrowed"
-//                 },
-//                 { session }
-//             );
-
-//             if (!borrowing) {
-//                 response = {
-//                     status: 404,
-//                     message: "Active borrowing record not found."
-//                 };
-//                 return;
-//             }
-
-//             await borrowedCollection.updateOne(
-//                 {
-//                     _id: borrowing._id,
-//                     status: "borrowed"
-//                 },
-//                 {
-//                     $set: {
-//                         status: "returned",
-//                         returnedAt: new Date()
-//                     }
-//                 },
-//                 { session }
-//             );
-
-//             await booksCollection.updateOne(
-//                 { _id: borrowing.bookId },
-//                 { $inc: { copies: 1 } },
-//                 { session }
-//             );
-
-//             response = {
-//                 status: 200,
-//                 message: "Book returned successfully."
-//             };
-//         });
-//     } finally {
-//         await session.endSession();
-//     }
-
-//     res.status(response.status).send({
-//         message: response.message
-//     });
-// });
 
 
 
