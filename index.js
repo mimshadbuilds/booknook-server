@@ -41,9 +41,9 @@ await borrowedCollection.createIndex(
 //http://localhost:8000/add-book
 app.post('/add-book', async(req, res) => {
     const data = {
-    ...req.body,
-    // addedByName: req.body.addedByName,
-    // addedByEmail: req.body.addedByEmail,
+        ...req.body,
+        addedByName: req.body.addedByName,
+        addedByEmail: req.body.addedByEmail,
     createdAt: new Date()
     }
     const result = await booksCollection.insertOne(data)
@@ -69,7 +69,7 @@ app.get("/books/:id", async (req, res) => {
 
     if (!ObjectId.isValid(id)) {
         return res.status(400).json({
-            message: "Invalid book ID."
+        message: "Invalid book ID."
     });
 }
     try {
@@ -86,8 +86,9 @@ app.get("/books/:id", async (req, res) => {
     }
 });
 
-app.get("/my-books", async (req, res) => {
-    const { email } = req.query;
+//http://localhost:8000/my-books
+app.get("/my-books/:email", async (req, res) => {
+    const { email } = req.params;
 
     if (!email) {
         return res.status(400).json({
@@ -111,6 +112,8 @@ app.get("/my-books", async (req, res) => {
     }
 });
 
+
+//http://localhost:8000/books/:id
 app.patch('/books/:id', async (req, res) => {
     const { id } = req.params;
     const updateData = req.body;
@@ -161,8 +164,6 @@ app.delete('/books/:id', async (req, res) => {
     }
 });
 
-
-
 //http://localhost:8000/books/most-read
 app.get("/books/most-read", async (req, res) => {
     try {
@@ -173,23 +174,16 @@ app.get("/books/most-read", async (req, res) => {
                     borrows: { $sum: 1 }
                 }
             },
-            {
-                $sort: { borrows: -1 }
-            },
-            {
-                $limit: 4
-            },
-            {
-                $lookup: {
+            { $sort: { borrows: -1 }},
+            { $limit: 4 },
+            { $lookup: {
                     from: "books",
                     localField: "_id",
                     foreignField: "_id",
                     as: "book"
                 }
             },
-            {
-                $unwind: "$book"
-            },
+            { $unwind: "$book"},
             {
                 $project: {
                     _id: "$book._id",
@@ -212,10 +206,227 @@ app.get("/books/most-read", async (req, res) => {
     }
 });
 
+//http://localhost:8000/borrows
+app.post("/borrows", async (req, res) => {
+    const { bookId, userId } = req.body;
 
+    if (!ObjectId.isValid(bookId) || !userId) {
+        return res.status(400).send({
+            message: "Invalid book or user information."
+        });
+    }
 
+    const session = mongoClient.startSession();
 
+    let response;
 
+    try {
+        await session.withTransaction(async () => {
+            const bookObjectId = new ObjectId(bookId);
+
+            const book = await booksCollection.findOne(
+                { _id: bookObjectId },
+                { session }
+            );
+
+            if (!book) {
+                response = {
+                    status: 404,
+                    message: "Book not found."
+                };
+                return;
+            }
+
+            const alreadyBorrowed = await borrowedCollection.findOne(
+                {
+                    bookId: bookObjectId,
+                    userId,
+                    status: "borrowed"
+                },
+                { session }
+            );
+
+            if (alreadyBorrowed) {
+                response = {
+                    status: 409,
+                    message: "You have already borrowed this book."
+                };
+                return;
+            }
+
+            if (book.copies <= 0) {
+                response = {
+                    status: 400,
+                    message: "This book is currently unavailable."
+                };
+                return;
+            }
+
+            const updateCopies = await booksCollection.updateOne(
+                {
+                    _id: bookObjectId,
+                    copies: { $gt: 0 }
+                },
+                {
+                    $inc: { copies: -1 }
+                },
+                { session }
+            );
+
+            if (updateCopies.modifiedCount === 0) {
+                response = {
+                    status: 400,
+                    message: "This book is currently unavailable."
+                };
+                return;
+            }
+
+            const borrowing = {
+                bookId: bookObjectId,
+                userId,
+                borrowedAt: new Date(),
+                returnedAt: null,
+                status: "borrowed"
+            };
+
+        await borrowedCollection.insertOne(borrowing, { session });
+            response = {
+                status: 201,
+                message: "Book borrowed successfully."
+            };
+        });
+    } finally {
+        await session.endSession();
+    }
+
+    res.status(response.status).send({
+        message: response.message
+    });
+});
+
+//get the borrows of logged in user
+//http://localhost:8000/borrows?userId=123
+app.get("/borrows", async (req, res) => {
+    const { userId } = req.query;
+
+    if (!userId) {
+        return res.status(400).send({
+            message: "User ID is required."
+        });
+    }
+
+    try {
+        const result = await borrowedCollection.aggregate([
+            {
+                $match: { userId }
+            },
+            {
+                $sort: { borrowedAt: -1 }
+            },
+            {   // Join with the books collection to get book details
+                $lookup: {
+                    from: booksCollection.collectionName,
+                    localField: "bookId",
+                    foreignField: "_id",
+                    pipeline: [
+                        {
+                            $project: {
+                                title: 1,
+                                author: 1,
+                                category: 1,
+                                bookImage: 1
+                            }
+                        }
+                    ],
+                    as: "book"
+                }
+            },
+            {
+                $unwind: {
+                    path: "$book",
+                    // preserveNullAndEmptyArrays: true
+                }
+            }
+        ]).toArray();
+
+        return res.send(result);
+    } catch (error) {
+        console.error("Get borrows error:", error);
+
+        return res.status(500).send({
+            message: "Unable to retrieve borrowing records."
+        });
+    }
+});
+
+//http://localhost:8000/borrows/:id
+app.patch("/borrows/:id", async (req, res) => {
+    const { id } = req.params;
+
+    if (!ObjectId.isValid(id)) {
+        return res.status(400).send({
+            message: "Invalid borrowing ID."
+        });
+    }
+
+    const session = mongoClient.startSession();
+
+    try {
+        const result = await session.withTransaction(async () => {
+            const borrowing = await borrowedCollection.findOne(
+                {
+                    _id: new ObjectId(id),
+                    status: "borrowed"
+                },
+                { session }
+            );
+
+            if (!borrowing) {
+                return {
+                    status: 404,
+                    message: "Active borrowing record not found."
+                };
+            }
+
+            await borrowedCollection.updateOne(
+                {
+                    _id: borrowing._id,
+                    status: "borrowed"
+                },
+                {
+                    $set: {
+                        status: "returned",
+                        returnedAt: new Date()
+                    }
+                },
+                { session }
+            );
+
+            await booksCollection.updateOne(
+                { _id: borrowing.bookId },
+                { $inc: { copies: 1 } },
+                { session }
+            );
+
+            return {
+                status: 200,
+                message: "Book returned successfully."
+            };
+        });
+
+        return res.status(result.status).send({
+            message: result.message
+        });
+    } catch (error) {
+        console.error("Return book error:", error);
+
+        return res.status(500).send({
+            message: "Unable to return this book. Please try again."
+        });
+    } finally {
+        await session.endSession();
+    }
+});
 
 //http://localhost:8000/
 app.get('/', (req, res) => {
