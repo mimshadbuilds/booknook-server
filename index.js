@@ -39,7 +39,6 @@ await borrowedCollection.createIndex(
 );
 
 
-
 //http://localhost:8000/add-book
 app.post('/add-book', async(req, res) => {
     const data = {
@@ -435,6 +434,10 @@ app.get('/', (req, res) => {
     res.send({msg: 'BookNook Server is in service!'})
 })
 
-app.listen(port, () => {
-    console.log(`BookNook server is runnig at ${port}`)
-})
+export default app;
+
+if (process.env.VERCEL !== '1') {
+    app.listen(port, () => {
+        console.log(`BookNook server is runnig at ${port}`)
+    })
+}
