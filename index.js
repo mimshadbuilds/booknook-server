@@ -2,6 +2,7 @@ import express from 'express';
 import { MongoClient, ObjectId } from 'mongodb';
 import 'dotenv/config'
 import cors from 'cors'
+import { createRemoteJWKSet, jwtVerify } from 'jose';
 
 
 const app = express();
@@ -9,6 +10,32 @@ const port = process.env.PORT || 8000;
 
 app.use(cors())
 app.use(express.json())
+
+const proxyToken = async(req, res, next) => {
+    const authHeader = req.headers.authorization;
+    
+    if(!authHeader){
+        return res.status(401).send({msg:'Unauthorized!'})
+    }
+
+    const token = authHeader.split(" ")[1]
+
+    if(!token){
+        return res.status(401).send({msg:'Unauthorized!'})
+    }
+    
+    try {
+        const JWKS = createRemoteJWKSet(new URL(`${process.env.CLIENT_URL}/api/auth/jwks`));
+
+        const { payload } = await jwtVerify(token, JWKS)
+        console.log(payload)
+        req.user = payload;
+        next();
+    } catch (error){
+        console.error('Token validation failed:', error)
+        return res.status(401).send({msg:'Unauthorized!'})
+    }
+}
 
 const client = new MongoClient(process.env.MONGODB_URI)
 
@@ -40,7 +67,7 @@ await borrowedCollection.createIndex(
 
 
 //http://localhost:8000/add-book
-app.post('/add-book', async(req, res) => {
+app.post('/add-book', proxyToken, async(req, res) => {
     const data = {
         ...req.body,
         addedByName: req.body.addedByName,
@@ -65,7 +92,7 @@ app.get("/books", async (req, res) => {
 });
 
 //http://localhost:8000/books/:id
-app.get("/books/:id", async (req, res) => {
+app.get("/books/:id", proxyToken, async (req, res) => {
     const { id } = req.params;
 
     if (!ObjectId.isValid(id)) {
